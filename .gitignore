@@ -1,0 +1,10 @@
+# 越狱打包的编译产物和 ipa
+Jailbreak/build/
+
+# Xcode 个人设置
+xcuserdata/
+.DS_Store
+
+# 本地开发用的私人说明和部署设置
+CLAUDE.md
+Jailbreak/local.env
