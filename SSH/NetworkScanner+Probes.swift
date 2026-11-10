@@ -34,7 +34,7 @@ extension NetworkScanner {
     // MARK: - Device type fingerprint (端口特征)
 
     private nonisolated static let fingerprintPorts: [UInt16] = [
-        53, 80, 139, 443, 445, 548, 554, 631, 5555, 8008, 8009, 9100, 62078,
+        53, 80, 139, 443, 445, 548, 554, 631, 5000, 5001, 5555, 8008, 8009, 8080, 8443, 9100, 62078,
     ]
 
     private nonisolated func probePorts(ip: String) async -> Set<UInt16> {

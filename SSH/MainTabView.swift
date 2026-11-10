@@ -53,6 +53,10 @@ struct MainTabView: View {
                             terminal.connectQuick(host: ip)
                             selection = .terminal
                         },
+                        onConnectSaved: { connection in
+                            terminal.connectSaved(connection)
+                            selection = .terminal
+                        },
                         onLocalTerminal: {
                             // 已经有本机会话就直接回去，没有才新开
                             if !(terminal.session?.isLocal ?? false) || terminal.session?.state == .closed {

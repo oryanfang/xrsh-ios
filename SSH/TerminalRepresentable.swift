@@ -22,6 +22,8 @@ struct TerminalRepresentable: UIViewRepresentable {
             if let view { coordinator.attachOutput(to: view) }
         }
         session.onFocusRequest = { [weak view] in _ = view?.becomeFirstResponder() }
+        session.isAlternateScreen = { [weak view] in view?.getTerminal().isCurrentBufferAlternate ?? false }
+        session.terminalColumns = { [weak view] in view?.getTerminal().cols ?? 80 }
         DispatchQueue.main.async { _ = view.becomeFirstResponder() }
         return view
     }
@@ -58,7 +60,7 @@ struct TerminalRepresentable: UIViewRepresentable {
         }
 
         func send(source: TerminalView, data: ArraySlice<UInt8>) {
-            session.send(data)
+            session.keyboardInput(data)
         }
 
         func clipboardCopy(source: TerminalView, content: Data) {

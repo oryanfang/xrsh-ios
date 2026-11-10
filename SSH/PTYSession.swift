@@ -15,6 +15,7 @@ final class PTYSession: TerminalSession {
     /// 最近一次"真 shell 不可用"的原因，给小命令行的开场白显示
     nonisolated(unsafe) static var lastFailure: String?
 
+    private let launch: Launch
     private var master: Int32 = -1
     private var pid: pid_t = 0
     private var readSource: DispatchSourceRead?
@@ -31,6 +32,7 @@ final class PTYSession: TerminalSession {
             return nil
         }
         guard let spawned = Self.spawn(launch, cols: cols, rows: rows) else { return nil }
+        self.launch = launch
         master = spawned.master
         pid = spawned.pid
         super.init()
@@ -126,13 +128,13 @@ final class PTYSession: TerminalSession {
         posix_spawn_file_actions_addopen(&actions, 0, slavePath, O_RDWR, 0)
         posix_spawn_file_actions_adddup2(&actions, 0, 1)
         posix_spawn_file_actions_adddup2(&actions, 0, 2)
-        changeDirectory(&actions, to: "/var/mobile")
+        SpawnHelpers.changeDirectory(&actions, to: "/var/mobile")
 
         var attributes: posix_spawnattr_t?
         posix_spawnattr_init(&attributes)
         defer { posix_spawnattr_destroy(&attributes) }
         posix_spawnattr_setflags(&attributes, Int16(0x0400))   // POSIX_SPAWN_SETSID
-        if asRoot, !applyRootPersona(&attributes) { return EPERM }
+        if asRoot, !SpawnHelpers.applyRootPersona(&attributes) { return EPERM }
 
         let argv: [UnsafeMutablePointer<CChar>?] = [strdup(shell), nil]
         let envp: [UnsafeMutablePointer<CChar>?] = environment.map { strdup($0) } + [nil]
@@ -143,25 +145,19 @@ final class PTYSession: TerminalSession {
         return posix_spawn(&pid, shell, &actions, &attributes, argv, envp)
     }
 
-    /// 让子进程从指定目录开始。iOS 头文件把这个函数标成了不可用，用运行时查找；找不到就算了
-    private nonisolated static func changeDirectory(_ actions: UnsafeMutablePointer<posix_spawn_file_actions_t?>, to path: String) {
-        typealias AddChdir = @convention(c) (UnsafeMutablePointer<posix_spawn_file_actions_t?>, UnsafePointer<CChar>) -> Int32
-        guard let symbol = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "posix_spawn_file_actions_addchdir_np") else { return }
-        _ = unsafeBitCast(symbol, to: AddChdir.self)(actions, path)
-    }
+    // MARK: - agent 跑命令
 
-    /// 让子进程以 root 身份运行。这几个函数不在公开头文件里，用运行时查找；找不到就不用 root
-    private nonisolated static func applyRootPersona(_ attributes: UnsafeMutablePointer<posix_spawnattr_t?>) -> Bool {
-        typealias SetPersona = @convention(c) (UnsafeMutablePointer<posix_spawnattr_t?>, uid_t, UInt32) -> Int32
-        typealias SetID = @convention(c) (UnsafeMutablePointer<posix_spawnattr_t?>, uid_t) -> Int32
-        guard let persona = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "posix_spawnattr_set_persona_np"),
-              let uid = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "posix_spawnattr_set_persona_uid_np"),
-              let gid = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "posix_spawnattr_set_persona_gid_np") else { return false }
-        let setPersona = unsafeBitCast(persona, to: SetPersona.self)
-        let setUID = unsafeBitCast(uid, to: SetID.self)
-        let setGID = unsafeBitCast(gid, to: SetID.self)
-        // 99 是越狱环境里常用的系统 persona，1 表示覆盖原有身份
-        return setPersona(attributes, 99, 1) == 0 && setUID(attributes, 0) == 0 && setGID(attributes, 0) == 0
+    override var canRunCommands: Bool { state == .connected }
+
+    /// 另开一个进程跑，身份和这个 shell 一样（能 root 就 root）
+    override func runCommand(_ command: String, timeout: TimeInterval) async throws -> RemoteCommandResult {
+        try await LocalCommand.run(
+            command,
+            shell: launch.shell,
+            environment: Self.makeEnvironment(for: launch),
+            directory: "/var/mobile",
+            timeout: timeout
+        )
     }
 
     // MARK: - 读写

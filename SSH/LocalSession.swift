@@ -24,6 +24,41 @@ final class LocalSession: TerminalSession {
     override var title: String { tr("本机终端") }
     override var isLocal: Bool { true }
     override var limitedCommands: Bool { true }
+    override var canRunCommands: Bool { state == .connected }
+    /// 小命令行执行完 /xr 已经打印了提示符（存到退出时才显示），不用再按回车
+    override var agentExitKeys: [UInt8] { [] }
+
+    /// agent 跑命令：交给小命令行执行，不显示在终端里，也不进历史
+    override func runCommand(_ command: String, timeout: TimeInterval) async throws -> RemoteCommandResult {
+        let name = command.split(separator: " ").first.map(String.init) ?? ""
+        // 这几个要操作界面，agent 用不了
+        if ["ssh", "exit", "logout", "clear", "/xr"].contains(name) {
+            throw NSError(domain: "SSH", code: 3, userInfo: [NSLocalizedDescriptionKey: tr("这条命令只能你自己输入：{0}", name)])
+        }
+        let shell = shell
+        let deadline = Date().addingTimeInterval(timeout)
+        let work = Task { await shell.execute(command, remember: false) { _ in } }
+        let timer = Task {
+            try await Task.sleep(for: .seconds(timeout))
+            work.cancel()
+        }
+        defer { timer.cancel() }
+        let result = await withTaskCancellationHandler {
+            await work.value
+        } onCancel: {
+            work.cancel()
+        }
+        try Task.checkCancellation()
+        // 去掉小命令行输出里的颜色
+        let text = result.output.replacingOccurrences(of: #"\u001B\[[0-9;]*m"#, with: "", options: .regularExpression)
+        var output = BoundedOutput(limit: 4000)
+        output.append(Array(text.utf8)[...])
+        return RemoteCommandResult(
+            output: output.text,
+            timedOut: Date() >= deadline,
+            truncated: output.truncated
+        )
+    }
 
     /// notice：为什么没能用上真 shell（有的话会显示在开场白里）
     init(shell: LocalShell, notice: String? = nil) {

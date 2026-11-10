@@ -10,7 +10,7 @@ Scan your Wi‑Fi, tap a device, and you're in a terminal. xrsh finds SSH device
   <img src="docs/screenshots/en-settings.png" width="30%" alt="Settings">
 </p>
 
-SwiftUI, iOS 17+, English and Chinese UI. The screenshots use demo data.
+SwiftUI, iOS 17+. The UI is in English, Chinese, Japanese and Russian (Japanese and Russian are new in 1.1; corrections are welcome). The screenshots use demo data.
 
 ## Features
 
@@ -29,8 +29,20 @@ SwiftUI, iOS 17+, English and Chinese UI. The screenshots use demo data.
 - Command panel: plain‑language command suggestions and ~70 documented commands. Commands are only typed into the input line, never run automatically.
 - File transfer over SFTP: browse, download and upload.
 
+**AI assistant (new in 1.1, optional, off by default)**
+- Type `/xr` in any terminal to talk to an AI right there, for example `/xr how much disk space is left?`. It can run commands on the connected device to get the job done.
+- Bring your own OpenAI‑compatible API: you enter the address, model and key. The key stays in the Keychain on your phone.
+- The app, not the AI, decides what runs: read‑only commands run on their own, anything that changes the device asks you y/n first, and destructive commands (wiping disks, rebooting) are blocked.
+- What is sent to your API: what you type, the device name, the scanned device list, the recent terminal output (can be turned off in Settings) and the output of commands it runs. Things that look like passwords, keys and tokens are hidden first, but this is a best‑effort filter. Nothing is sent while the assistant is off.
+- This is the first version. It is tested in the simulator and on one jailbroken iPhone, so treat it as experimental.
+
+**Optional extras (new in 1.1, all off by default)**
+- Enter tmux after SSH connects, so a dropped connection picks up where it left off (the device needs tmux installed).
+- Device tools: long‑press a device to open its web page or wake it with Wake on LAN.
+- Saved connections for devices you reach by address, plus a guide for reaching home devices from outside with Tailscale.
+
 **Settings**
-- Search (devices and settings together), language, terminal font size, auto‑scan, clearing saved passwords / keys / scan results.
+- Search (devices and settings together), language, terminal font size, auto‑scan, clearing saved passwords / keys / scan results, and switches for the features above.
 
 ## Install
 

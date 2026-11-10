@@ -43,6 +43,8 @@ final class SSHSession: TerminalSession {
     private var client: SSHClient?
     private var writer: TTYStdinWriter?
     private var task: Task<Void, Never>?
+    private let wrapsInTmux = SettingsKey.bool(SettingsKey.tmuxResume, fallback: false)
+    private var tmuxStarted = false
     private var cols = 80
     private var rows = 24
 
@@ -74,12 +76,16 @@ final class SSHSession: TerminalSession {
                     terminalPixelHeight: 0,
                     terminalModes: SSHTerminalModes([:])
                 )
-                try await client.withPTY(request) { inbound, outbound in
+                // 像电脑上的 ssh 一样把语言带过去，否则对方没配语言时中文会乱码。
+                // 对方不接受也没关系，不等回复，不影响连接
+                let locale = SSHChannelRequestEvent.EnvironmentRequest(wantReply: false, name: "LANG", value: "C.UTF-8")
+                try await client.withPTY(request, environment: [locale]) { inbound, outbound in
                     self.attach(outbound)
                     for try await output in inbound {
                         switch output {
                         case .stdout(let buffer), .stderr(let buffer):
                             self.receive(Array(buffer.readableBytesView)[...])
+                            self.startTmuxIfNeeded()
                         }
                     }
                 }
@@ -87,6 +93,20 @@ final class SSHSession: TerminalSession {
             } catch {
                 finish(error: error)
             }
+        }
+    }
+
+    override var agentWorksInAlternateScreen: Bool { wrapsInTmux }
+
+    /// 等 shell 有输出了再敲。-A：已有这个会话就接回去。对方没装 tmux 就什么也不做，留在普通 shell
+    /// 开头的空格让这条命令不进历史；-u 让 tmux 按 UTF-8 显示中文
+    private func startTmuxIfNeeded() {
+        guard wrapsInTmux, !tmuxStarted else { return }
+        tmuxStarted = true
+        Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(400))
+            let command = " [ -z \"$TMUX\" ] && command -v tmux >/dev/null 2>&1 && tmux -u new-session -A -s xrsh\r"
+            self?.send(Array(command.utf8)[...])
         }
     }
 
@@ -169,6 +189,15 @@ final class SSHSession: TerminalSession {
             throw NSError(domain: "SSH", code: 1, userInfo: [NSLocalizedDescriptionKey: tr("还没有连上设备")])
         }
         return try await client.openSFTP()
+    }
+
+    override var canRunCommands: Bool { state == .connected }
+
+    override func runCommand(_ command: String, timeout: TimeInterval) async throws -> RemoteCommandResult {
+        guard let client else {
+            throw NSError(domain: "SSH", code: 1, userInfo: [NSLocalizedDescriptionKey: tr("还没有连上设备")])
+        }
+        return try await RemoteCommand.run(command, on: client, timeout: timeout)
     }
 
     override func send(_ bytes: ArraySlice<UInt8>) {

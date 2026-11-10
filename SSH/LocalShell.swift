@@ -29,6 +29,7 @@ final class LocalShell {
     var devices: () -> [SSHDevice] = { [] }
     var startScan: () -> Void = {}
     var openSSH: (_ host: String, _ port: Int, _ user: String?) -> Void = { _, _, _ in }
+    var openAgent: (_ prompt: String) -> Void = { _ in }
 
     static let commandNames = [
         "cat", "cd", "clear", "cp", "curl", "date", "devices", "df", "echo", "exit", "free", "grep",
@@ -77,10 +78,10 @@ final class LocalShell {
     }
 
     /// emit 用来边运行边输出（ping、curl 的进度）；最后一条命令且没有重定向时才会用到
-    func execute(_ line: String, emit: @escaping (String) -> Void) async -> Result {
+    func execute(_ line: String, remember shouldRemember: Bool = true, emit: @escaping (String) -> Void) async -> Result {
         let trimmed = line.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return Result() }
-        remember(trimmed)
+        if shouldRemember { remember(trimmed) }
 
         guard let commands = parse(trimmed) else {
             return Result(output: Color.red + tr("语法错误：引号没有闭合") + Color.reset + "\n")
@@ -235,6 +236,10 @@ final class LocalShell {
         let args = Array(argv.dropFirst())
         switch argv[0] {
         case "help": return (helpText, "")
+        case "/xr":
+            guard AgentSettings.isEnabled else { return error(tr("AI 助手还没打开，可以在设置里打开。")) }
+            openAgent(args.joined(separator: " "))
+            return ("", "")
         case "clear", "exit", "logout": return ("", "")
         case "pwd": return (cwd.path + "\n", "")
         case "cd": return cd(args)
@@ -275,7 +280,10 @@ final class LocalShell {
     }
 
     var helpText: String {
-        if AppLanguage.effective == .en {
+        switch AppLanguage.effective {
+        case .ja: return Self.japaneseHelp
+        case .ru: return Self.russianHelp
+        case .en:
             return """
             Local terminal: a small shell inside the app's sandbox (files stay in the app's own folder)
 
@@ -290,6 +298,8 @@ final class LocalShell {
             Press Ctrl+C to interrupt a running command (ping, curl downloads)
 
             """
+        default:
+            break
         }
         return """
         本机终端：运行在 App 沙盒里的小命令行（文件都在 App 自己的文件夹里）

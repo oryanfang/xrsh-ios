@@ -8,11 +8,23 @@ import UIKit
 final class TerminalModel: ObservableObject {
     @Published var session: TerminalSession? {
         didSet {
+            session?.onAgentRequest = { [weak self] prompt in
+                self?.openAgent(prompt: prompt)
+            }
+            if let agentTerminal, session !== oldValue {
+                // AI 切换设备时对话跟过去；用户自己换了连接就结束对话
+                if agentSwitching, let session {
+                    agentTerminal.move(to: session)
+                } else {
+                    agentTerminal.end()
+                }
+            }
             // 会话状态变了（连上、断开）也要刷新终端页的工具栏
             sessionChange = session?.objectWillChange.sink { [weak self] _ in
                 self?.objectWillChange.send()
                 // 状态更新完之后，看看是不是在后台被断开的
                 DispatchQueue.main.async {
+                    self?.endAgentIfDisconnected()
                     self?.rememberOrForgetSession()
                     self?.reconnectIfDropped()
                 }
@@ -25,7 +37,20 @@ final class TerminalModel: ObservableObject {
     @Published var prefillUser = ""
     @Published var prefillPort = 22
 
-    private weak var scanner: NetworkScanner?
+    struct AgentRequest: Identifiable {
+        let id = UUID()
+        let prompt: String
+    }
+
+    /// 不为 nil 时弹出「连接 AI」，填好后接着打开对话
+    @Published var agentSetup: AgentRequest?
+    /// 正在进行的终端内对话
+    var agentTerminal: AgentTerminal?
+    var agentSwitching = false
+    /// 「保留 AI 对话」打开时留着的对话
+    var savedAgent: AgentSession?
+
+    weak var scanner: NetworkScanner?
 
     // MARK: - 断线自动重连
     // App 切到后台后，系统会悄悄掐掉 SSH 连接。回到前台时如果发现是这样断的，
@@ -138,6 +163,9 @@ final class TerminalModel: ObservableObject {
         shell.openSSH = { [weak self] host, port, user in
             self?.requestConnect(host: host, user: user ?? "", port: port)
         }
+        shell.openAgent = { [weak self] prompt in
+            self?.openAgent(prompt: prompt)
+        }
         session = LocalSession(shell: shell, notice: PTYSession.lastFailure)
     }
 
@@ -150,44 +178,21 @@ final class TerminalModel: ObservableObject {
         session.connect(password: password, key: useKey ? key : nil)
     }
 
+    /// 点常用连接：有密钥或保存的密码就直接连，没有才弹出填写面板
+    func connectSaved(_ connection: SavedConnection) {
+        let account = Keychain.account(user: connection.user, host: connection.host, port: connection.port)
+        let password = Keychain.password(for: account)
+        if Keychain.privateKey(for: account) != nil || password != nil {
+            start(host: connection.host, port: connection.port, username: connection.user, password: password ?? "")
+        } else {
+            requestConnect(host: connection.host, user: connection.user, port: connection.port)
+        }
+    }
+
     func disconnect() {
+        savedAgent = nil
         UserDefaults.standard.removeObject(forKey: Self.lastSessionKey)
         session?.close()
         session = nil
     }
 }
-
-#if DEBUG
-/// 只在调试版里：README 截图用的演示会话，显示一段预设的 SSH 输出，不会连任何设备
-@MainActor
-final class DemoSession: TerminalSession {
-    override var title: String { "pi@raspberrypi.local" }
-    override var reconnectHost: String? { "192.168.1.23" }
-
-    override init() {
-        super.init()
-        state = .connected
-        let g = "\u{1B}[1;32m", b = "\u{1B}[1;34m", d = "\u{1B}[2m", r = "\u{1B}[0m"
-        let prompt = "\(g)pi@raspberrypi\(r):\(b)~\(r)$ "
-        let lines = [
-            "\(d)Linux raspberrypi 6.6.20 aarch64\(r)",
-            "\(d)Last login: Tue Nov  4 16:40:12\(r)",
-            "",
-            prompt + "uname -a",
-            "Linux raspberrypi 6.6.20 aarch64 GNU/Linux",
-            prompt + "uptime",
-            " 16:41:02 up 12 days,  3:24,  load 0.08",
-            prompt + "df -h /",
-            "Filesystem  Size  Used Avail Use% Mounted",
-            "/dev/root    29G  6.1G   22G  22% /",
-            prompt + "ls",
-            "\(b)Documents\(r)  \(b)projects\(r)  \(b)scripts\(r)  notes.txt",
-        ]
-        receive(Array((lines.joined(separator: "\r\n") + "\r\n").utf8)[...])
-    }
-
-    override func send(_ bytes: ArraySlice<UInt8>) {}
-    override func resize(cols: Int, rows: Int) {}
-    override func close() { state = .closed }
-}
-#endif

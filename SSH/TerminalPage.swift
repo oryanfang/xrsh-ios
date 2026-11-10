@@ -89,6 +89,17 @@ struct TerminalPage: View {
             .sheet(isPresented: $model.showConnect) {
                 ConnectSheet(model: model)
             }
+            .sheet(item: $model.agentSetup, onDismiss: { model.session?.requestFocus() }) { request in
+                NavigationStack {
+                    AgentSetupForm(onCancel: {
+                        model.agentSetup = nil
+                    }, onDone: {
+                        model.agentSetup = nil
+                        // 等设置面板收起再开始
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { model.openAgent(prompt: request.prompt) }
+                    })
+                }
+            }
             .alert(tr("免密登录"), isPresented: Binding(
                 get: { keyMessage != nil },
                 set: { if !$0 { keyMessage = nil } }
@@ -122,10 +133,13 @@ private struct SessionView: View {
     @ObservedObject var model: TerminalModel
     @State private var showCommands = false
     @State private var showTransfer = false
+    @AppStorage(SettingsKey.agentEnabled) private var agentEnabled = false
 
     var body: some View {
         ZStack {
             TerminalRepresentable(session: session)
+                // 换了连接要重建终端视图，否则画面和键盘还接着旧连接
+                .id(ObjectIdentifier(session))
                 .background(Color.black)
             switch session.state {
             case .connecting:
@@ -162,11 +176,16 @@ private struct SessionView: View {
                 miniShellOnly: session.limitedCommands,
                 onTransfer: session is SSHSession ? {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { showTransfer = true }
+                } : nil,
+                // vim、less 这类全屏程序里不能开始对话
+                onAgent: agentEnabled && session.canOpenAgent ? {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { model.openAgent(prompt: "") }
                 } : nil
             ) { command in
                 // 等面板收起之后再填，只填入输入行，不按回车
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-                    session.send(Array(command.utf8)[...])
+                    // 正在和 AI 对话时填进对话的输入行，不会发给设备
+                    session.keyboardInput(Array(command.utf8)[...])
                     session.requestFocus()
                 }
             }

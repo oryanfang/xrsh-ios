@@ -11,6 +11,13 @@ struct SettingsView: View {
     @AppStorage(SettingsKey.sshGuide) private var sshGuide = false
     @AppStorage(SettingsKey.autoReconnect) private var autoReconnect = false
     @AppStorage(SettingsKey.keyRevision) private var keyRevision = 0
+    @AppStorage(SettingsKey.tmuxResume) private var tmuxResume = false
+    @AppStorage(SettingsKey.deviceTools) private var deviceTools = false
+    @AppStorage(SettingsKey.savedConnectionsEnabled) private var savedEnabled = false
+    @AppStorage(SettingsKey.savedConnections) private var savedData = Data()
+    @AppStorage(SettingsKey.agentEnabled) private var agentEnabled = false
+    @AppStorage(SettingsKey.agentIncludeOutput) private var agentIncludeOutput = true
+    @AppStorage(SettingsKey.agentKeepConversation) private var agentKeepConversation = false
     @AppStorage(AppLanguage.storageKey) private var language = AppLanguage.system.rawValue
 
     @State private var query = ""
@@ -39,11 +46,13 @@ struct SettingsView: View {
     }
 
     private var anySettingMatches: Bool {
-        [languageWords, terminalWords, scanWords, securityWords, filesWords, aboutWords].contains { show($0) }
+        [languageWords, terminalWords, savedWords, agentWords, scanWords, securityWords, filesWords, aboutWords].contains { show($0) }
     }
 
-    private let terminalWords = "终端 字体 大小 字号 本机 真 shell 越狱 重连 断线 terminal font size local jailbreak reconnect"
-    private let scanWords = "扫描 自动 设备 结果 缓存 清除 引导 怎么开 scan automatic device results cache clear guide how to enable ssh"
+    private let terminalWords = "终端 字体 大小 字号 本机 真 shell 越狱 重连 断线 tmux 接回 terminal font size local jailbreak reconnect resume"
+    private let savedWords = "常用 连接 保存 地址 外面 回家 公网 saved connections favorite tailscale remote vpn"
+    private let agentWords = "AI 助手 模型 接口 密钥 agent assistant model api key xr"
+    private let scanWords = "扫描 自动 设备 结果 缓存 清除 引导 怎么开 小工具 网页 唤醒 mac tools web wake on lan scan automatic device results cache clear guide how to enable ssh"
     private let securityWords = "安全 密码 钥匙串 主机 密钥 清除 记住 security password keychain host key remember"
     private let filesWords = "文件 下载 文件夹 传文件 位置 files download folder transfer location"
     private let languageWords = "语言 language english 中文 切换"
@@ -67,6 +76,8 @@ struct SettingsView: View {
 
                 if show(languageWords) { languageSection }
                 if show(terminalWords) { terminalSection }
+                if show(savedWords) { savedSection }
+                if show(agentWords) { agentSection }
                 if show(scanWords) { scanSection }
                 if show(securityWords) {
                     keyDevicesSection
@@ -122,10 +133,57 @@ struct SettingsView: View {
 
             Toggle(tr("优先使用真 shell"), isOn: $preferRealShell)
             Toggle(tr("断线后自动重连"), isOn: $autoReconnect)
+            Toggle(tr("SSH 连上后进入 tmux"), isOn: $tmuxResume)
         } header: {
             Text(tr("终端"))
         } footer: {
-            Text(tr("真 shell 只有在越狱的手机上才有。关掉后，进入本机终端会一直用 App 自带的小命令行。开启断线自动重连后，App 切到后台被系统断开，回来时会自动重连一次。"))
+            VStack(alignment: .leading, spacing: 6) {
+                Text(tr("真 shell 只有在越狱的手机上才有。关掉后，进入本机终端会一直用 App 自带的小命令行。开启断线自动重连后，App 切到后台被系统断开，回来时会自动重连一次。"))
+                Text(tr("进入 tmux 后，断线重连能接回原来的内容，正在跑的命令也不会停。对方要装了 tmux，没装就和平时一样；改了开关，下次连接才生效。在 tmux 里的 vim 搜索 /xr 会打开 AI 助手。"))
+            }
+        }
+    }
+
+    /// 常用连接：开关和列表
+    private var savedSection: some View {
+        Section {
+            Toggle(tr("在设备页显示常用连接"), isOn: $savedEnabled)
+            if savedEnabled {
+                ForEach(SavedConnection.list(from: savedData)) { connection in
+                    NavigationLink {
+                        SavedConnectionForm(connection: connection)
+                    } label: {
+                        Text(connection.title)
+                    }
+                    .swipeActions {
+                        Button(tr("删除"), role: .destructive) {
+                            let list = SavedConnection.list(from: savedData).filter { $0.id != connection.id }
+                            savedData = SavedConnection.encode(list)
+                        }
+                    }
+                }
+                NavigationLink(tr("添加常用连接")) { SavedConnectionForm() }
+                NavigationLink(tr("从外面连回家")) { TailscaleGuide() }
+            }
+        } header: {
+            Text(tr("常用连接"))
+        } footer: {
+            Text(tr("手动填地址的设备（比如公网服务器）可以存在这里，点一下就连。这里只存地址和用户名，密码还是在钥匙串里。"))
+        }
+    }
+
+    private var agentSection: some View {
+        Section {
+            Toggle(tr("打开 AI 助手"), isOn: $agentEnabled)
+            if agentEnabled {
+                NavigationLink(tr("连接 AI")) { AgentSetupForm() }
+                Toggle(tr("默认带上最近的终端输出"), isOn: $agentIncludeOutput)
+                Toggle(tr("保留 AI 对话"), isOn: $agentKeepConversation)
+            }
+        } header: {
+            Text(tr("AI 助手"))
+        } footer: {
+            Text(tr("默认关闭，关着不会发任何请求。打开后，在终端输入 /xr 来用，也可以从右下角的小三角进入。只读的命令会自动运行，其他命令都要你确认。保留对话后，退出后再输入 /xr 可以接着聊，点「断开」或输入 /clear 才会清空；对话越长，每次发给 AI 的内容越多。"))
         }
     }
 
@@ -133,11 +191,15 @@ struct SettingsView: View {
         Section {
             Toggle(tr("打开 App 时自动扫描"), isOn: $autoScan)
             Toggle(tr("显示「怎么开 SSH」引导"), isOn: $sshGuide)
+            Toggle(tr("设备小工具"), isOn: $deviceTools)
             Button(tr("清除保存的扫描结果"), role: .destructive) { confirming = .scanResults }
         } header: {
             Text(tr("扫描"))
         } footer: {
-            Text(tr("设备的自定义名称不会被清除。"))
+            VStack(alignment: .leading, spacing: 6) {
+                Text(tr("设备的自定义名称不会被清除。"))
+                Text(tr("打开设备小工具后，长按设备可以打开它的网页、用网络唤醒叫醒它。能不能唤醒取决于对方设备是否开了这个功能。"))
+            }
         }
     }
 

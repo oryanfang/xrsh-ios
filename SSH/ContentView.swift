@@ -5,11 +5,20 @@ struct ContentView: View {
     @ObservedObject var scanner: NetworkScanner
     /// 点击 SSH 设备时调用，参数是设备 IP
     var onConnect: (String) -> Void = { _ in }
+    /// 点常用连接时调用
+    var onConnectSaved: (SavedConnection) -> Void = { _ in }
     /// 点"进入本机终端"时调用
     var onLocalTerminal: () -> Void = {}
     /// 免密登录的密钥有增减时会变，用来刷新五角星
     @AppStorage(SettingsKey.keyRevision) private var keyRevision = 0
     @AppStorage(SettingsKey.sshGuide) private var sshGuide = false
+    @AppStorage(SettingsKey.deviceTools) private var deviceTools = false
+    @AppStorage(SettingsKey.savedConnectionsEnabled) private var savedEnabled = false
+    @AppStorage(SettingsKey.savedConnections) private var savedData = Data()
+    @State private var showSaved = true
+    @State private var macDevice: SSHDevice?
+    @State private var draftMAC = ""
+    @State private var wakeMessage: String?
     @State private var guideDevice: SSHDevice?
     @State private var showSSH = true
     @State private var showOther = true
@@ -36,6 +45,9 @@ struct ContentView: View {
                         Label(tr("怎么开 SSH"), systemImage: "questionmark.circle")
                     }
                 }
+                if deviceTools {
+                    toolButtons(device)
+                }
                 Button {
                     draftName = device.alias ?? ""
                     renamingIP = device.ipAddress
@@ -55,6 +67,89 @@ struct ContentView: View {
                     Label(tr("复制 IP"), systemImage: "doc.on.doc")
                 }
             }
+    }
+
+    @ViewBuilder
+    private func toolButtons(_ device: SSHDevice) -> some View {
+        if let url = DeviceTools.webURL(for: device) {
+            Button {
+                UIApplication.shared.open(url)
+            } label: {
+                Label(tr("打开网页"), systemImage: "safari")
+            }
+        }
+        if let mac = DeviceTools.savedMAC(for: device.ipAddress) {
+            Button {
+                wake(device, mac: mac)
+            } label: {
+                Label(tr("网络唤醒"), systemImage: "power")
+            }
+            Button {
+                draftMAC = mac
+                macDevice = device
+            } label: {
+                Label(tr("修改 MAC 地址"), systemImage: "pencil")
+            }
+        } else {
+            Button {
+                Task {
+                    draftMAC = await DeviceTools.lookUpMAC(ip: device.ipAddress) ?? ""
+                    macDevice = device
+                }
+            } label: {
+                Label(tr("网络唤醒"), systemImage: "power")
+            }
+        }
+    }
+
+    private func wake(_ device: SSHDevice, mac: String) {
+        let sent = DeviceTools.wake(mac: mac, ip: device.ipAddress, localIP: scanner.localIP, mask: scanner.subnetMask)
+        wakeMessage = sent
+            ? tr("唤醒信号已发出。设备要开着网络唤醒功能才会醒，这边收不到确认，等一会儿再扫描看看。")
+            : tr("唤醒信号没有发出去，请确认手机连着同一个 Wi-Fi，并且允许 App 访问本地网络。")
+    }
+
+    private func saveMACAndWake() {
+        guard let device = macDevice else { return }
+        guard let mac = DeviceTools.normalizeMAC(draftMAC) else {
+            wakeMessage = tr("MAC 地址格式不对，应该像 aa:bb:cc:dd:ee:ff。")
+            return
+        }
+        DeviceTools.saveMAC(mac, for: device.ipAddress)
+        wake(device, mac: mac)
+    }
+
+    /// 常用连接分组
+    @ViewBuilder
+    private var savedSection: some View {
+        let list = SavedConnection.list(from: savedData)
+        if savedEnabled, !list.isEmpty {
+            Section {
+                if showSaved {
+                    ForEach(list) { connection in
+                        HStack {
+                            Image(systemName: "bookmark.fill")
+                                .foregroundStyle(.blue)
+                                .font(.title3)
+                                .frame(width: 28)
+                            VStack(alignment: .leading) {
+                                Text(connection.title)
+                                if !connection.name.isEmpty {
+                                    Text(connection.address)
+                                        .font(.caption.monospaced())
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                            Spacer()
+                        }
+                        .contentShape(Rectangle())
+                        .onTapGesture { onConnectSaved(connection) }
+                    }
+                }
+            } header: {
+                SectionHeader(title: tr("常用连接"), count: list.count, isExpanded: $showSaved)
+            }
+        }
     }
 
     /// 一个可以折叠的设备分组（SSH 设备 / 可探测到的设备）
@@ -130,6 +225,7 @@ struct ContentView: View {
                     }
                 }
 
+                savedSection
                 deviceSection(tr("SSH 设备"), scanner.sshDevices, isExpanded: $showSSH,
                               empty: tr("暂无发现 SSH 设备"))
                 deviceSection(tr("可探测到的设备"), scanner.otherDevices, isExpanded: $showOther,
@@ -154,6 +250,26 @@ struct ContentView: View {
             } message: {
                 Text(renamingIP ?? "")
             }
+            .alert(tr("网络唤醒"), isPresented: Binding(
+                get: { macDevice != nil },
+                set: { if !$0 { macDevice = nil } }
+            )) {
+                TextField("aa:bb:cc:dd:ee:ff", text: $draftMAC)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                Button(tr("保存并唤醒")) { saveMACAndWake() }
+                Button(tr("取消"), role: .cancel) {}
+            } message: {
+                Text(tr("需要 {0} 的 MAC 地址，只保存在这台手机上。", macDevice?.ipAddress ?? ""))
+            }
+            .alert(tr("网络唤醒"), isPresented: Binding(
+                get: { wakeMessage != nil },
+                set: { if !$0 { wakeMessage = nil } }
+            )) {
+                Button(tr("好")) {}
+            } message: {
+                Text(wakeMessage ?? "")
+            }
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
                     if scanner.isScanning {
@@ -171,113 +287,6 @@ struct ContentView: View {
                     }
                 }
             }
-        }
-    }
-}
-
-private struct SectionHeader: View {
-    let title: String
-    let count: Int
-    @Binding var isExpanded: Bool
-
-    var body: some View {
-        Button {
-            withAnimation(.easeInOut(duration: 0.2)) { isExpanded.toggle() }
-        } label: {
-            HStack {
-                Text(title)
-                Spacer()
-                if count > 0 {
-                    Text(tr("{0} 台", count))
-                        .font(.caption)
-                }
-                Image(systemName: "chevron.right")
-                    .font(.caption.weight(.semibold))
-                    .rotationEffect(.degrees(isExpanded ? 90 : 0))
-            }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .foregroundStyle(.secondary)
-    }
-}
-
-struct DeviceRow: View {
-    let device: SSHDevice
-    /// 这台设备设置过免密登录，点一下就能直接进入，显示黄色五角星
-    var hasKey = false
-
-    private var icon: String {
-        device.deviceType?.icon ?? (device.hasSSH ? "desktopcomputer" : "wifi")
-    }
-
-    var body: some View {
-        HStack {
-            Image(systemName: icon)
-                .foregroundStyle(device.hasSSH ? .blue : .gray)
-                .font(.title3)
-                .frame(width: 28)
-            VStack(alignment: .leading) {
-                Text(device.ipAddress)
-                    .font(.body.monospaced())
-                let detail = [device.displayName, device.deviceType?.name].compactMap { $0 }.joined(separator: " · ")
-                if !detail.isEmpty {
-                    Text(detail)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                } else if let banner = device.banner {
-                    Text(tr("未获取到名称 · {0}", banner))
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                }
-                if device.isOffline {
-                    TimelineView(.periodic(from: .now, by: 15)) { context in
-                        Text(tr("上次在线 {0}", RelativeTime.text(device.lastSeen, now: context.date)))
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
-                    }
-                }
-            }
-            Spacer()
-            if device.isNew, Date().timeIntervalSince(device.firstSeen) < 24 * 3600 {
-                Text(tr("新"))
-                    .font(.caption2.weight(.bold))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(Color.orange, in: Capsule())
-            }
-            if device.hasSSH {
-                if hasKey {
-                    Image(systemName: "star.fill")
-                        .foregroundStyle(.yellow)
-                } else {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundStyle(.green)
-                }
-            }
-        }
-        .opacity(device.isOffline ? 0.5 : 1)
-    }
-}
-
-/// "3分钟前" 这样的相对时间，会自己每隔一会儿刷新
-private struct RelativeTime: View {
-    let date: Date
-    private static let formatter: RelativeDateTimeFormatter = {
-        let formatter = RelativeDateTimeFormatter()
-        formatter.unitsStyle = .full
-        return formatter
-    }()
-
-    static func text(_ date: Date, now: Date) -> String {
-        formatter.locale = AppLanguage.locale
-        return now.timeIntervalSince(date) < 10 ? tr("刚刚") : formatter.localizedString(for: date, relativeTo: now)
-    }
-
-    var body: some View {
-        TimelineView(.periodic(from: .now, by: 15)) { context in
-            Text(Self.text(date, now: context.date))
         }
     }
 }

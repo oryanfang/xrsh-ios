@@ -10,6 +10,8 @@ struct CommandPanel: View {
     var miniShellOnly = false
     /// 点"传文件"时调用；本机命令行没有这一项，传 nil
     var onTransfer: (() -> Void)?
+    /// 打开 AI 助手（/xr 没被认出来时的备用入口）；没开 AI 助手时传 nil
+    var onAgent: (() -> Void)?
     /// 选中命令后调用（危险命令确认之后才会调用）
     let onPick: (String) -> Void
 
@@ -19,6 +21,33 @@ struct CommandPanel: View {
     var body: some View {
         NavigationStack {
             List {
+                if let onAgent {
+                    Section {
+                        Button {
+                            onAgent()
+                            dismiss()
+                        } label: {
+                            HStack(spacing: 12) {
+                                Image(systemName: "terminal.fill")
+                                    .font(.title2)
+                                    .foregroundStyle(Color.accentColor)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(tr("AI 助手"))
+                                        .foregroundStyle(.primary)
+                                    Text(tr("在终端输入 /xr 也能打开"))
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                Image(systemName: "chevron.right")
+                                    .font(.footnote)
+                                    .foregroundStyle(.tertiary)
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
                 Section {
                     NavigationLink {
                         CommandStoreView(canInstall: canInstall, miniShellOnly: miniShellOnly) { command in

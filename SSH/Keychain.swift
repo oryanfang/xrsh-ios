@@ -88,6 +88,23 @@ enum Keychain {
         keysChanged()
     }
 
+    // MARK: - Agent 的 API Key
+
+    private static let agentService = "thexyrith.SSH.agentKey"
+    private static let agentAccount = "default"
+
+    static func agentAPIKey() -> String? {
+        read(agentAccount, service: agentService).flatMap { String(data: $0, encoding: .utf8) }
+    }
+
+    static func saveAgentAPIKey(_ key: String) {
+        write(Data(key.utf8), account: agentAccount, service: agentService)
+    }
+
+    static func deleteAgentAPIKey() {
+        SecItemDelete(query(agentAccount, service: agentService) as CFDictionary)
+    }
+
     private static func accounts(service: String) -> [String] {
         var request: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,

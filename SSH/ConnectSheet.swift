@@ -10,6 +10,9 @@ struct ConnectSheet: View {
     @State private var password = ""
     @State private var remember = true
     @State private var useKey = true
+    @State private var saveToList = false
+    @AppStorage(SettingsKey.savedConnectionsEnabled) private var savedEnabled = false
+    @AppStorage(SettingsKey.savedConnections) private var savedData = Data()
 
     private var portNumber: Int? { Int(port).flatMap { (1...65535).contains($0) ? $0 : nil } }
     private var canConnect: Bool {
@@ -27,6 +30,9 @@ struct ConnectSheet: View {
                     TextField(tr("用户名"), text: $username)
                     SecureField(tr("密码"), text: $password)
                     Toggle(tr("记住密码"), isOn: $remember)
+                    if savedEnabled {
+                        Toggle(tr("保存到常用连接"), isOn: $saveToList)
+                    }
                 } footer: {
                     Text(tr("密码保存在系统钥匙串里，只存在这台手机上。"))
                 }
@@ -86,6 +92,13 @@ struct ConnectSheet: View {
             Keychain.save(password, for: account)
         } else {
             Keychain.delete(account)
+        }
+        if savedEnabled, saveToList {
+            var list = SavedConnection.list(from: savedData)
+            if !list.contains(where: { $0.host == host && $0.port == portNumber && $0.user == username }) {
+                list.append(SavedConnection(host: host, port: portNumber, user: username))
+                savedData = SavedConnection.encode(list)
+            }
         }
         model.start(host: host, port: portNumber, username: username, password: password, useKey: useKey)
         dismiss()
